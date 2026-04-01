@@ -167,7 +167,13 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
     # --- latency ping-pong ---
     print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
-    for _ in range((world_size - 1) * NUM_LATENCY_ITERS):
+    ping_iters = (world_size - 1) * NUM_LATENCY_ITERS
+    ping_msg_size = len(pickle.dumps({"addr": my_addr}))
+    print(
+        f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
+        flush=True,
+    )
+    for _ in range(ping_iters):
         msg = recv_queue.get()
         ping = pickle.loads(msg)
         client_addr = ping["addr"]
@@ -244,9 +250,15 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
 
     # --- latency ping-pong ---
     print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
+    ping_data = pickle.dumps({"addr": my_addr})
+    ping_msg_size = len(ping_data)
+    ping_iters = NUM_LATENCY_ITERS
+    print(
+        f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
+        flush=True,
+    )
     latencies: list[float] = []
-    for _ in range(NUM_LATENCY_ITERS):
-        ping_data = pickle.dumps({"addr": my_addr})
+    for _ in range(ping_iters):
         t0 = time.perf_counter_ns()
         send_done = threading.Event()
         engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
