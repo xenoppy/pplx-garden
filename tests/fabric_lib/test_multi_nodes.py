@@ -274,7 +274,12 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             send_done = threading.Event()
             engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
             send_done.wait()
-            recv_queue.get()
+            recv_buffer = recv_queue.get()
+            recv_data = pickle.loads(recv_buffer)
+            if not torch.allclose(recv_data["tensor"], tensor_to_send, atol=1e-3, rtol=1e-3):  # sanity check
+                print("❌Received tensor does not match sent tensor")
+            else:
+                print("✅Received tensor matches sent tensor")
             t1 = time.perf_counter_ns()
             latencies.append((t1 - t0) / 1000.0)  # us
 
