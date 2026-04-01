@@ -274,8 +274,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
             send_done.wait()
             recv_buffer = recv_queue.get()
-            recv_data = pickle.loads(recv_buffer)
             t1 = time.perf_counter_ns()
+            recv_data = pickle.loads(recv_buffer)
             if not torch.allclose(recv_data["tensor"], tensor_to_send, atol=1e-3, rtol=1e-3):  # sanity check
                 print("❌Received tensor does not match sent tensor")
             else:
