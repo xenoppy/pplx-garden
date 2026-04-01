@@ -179,13 +179,11 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             flush=True,
         )
         for _ in range(ping_iters):
-            msg = recv_queue.get()
-            ping = pickle.loads(msg)
-            send_msg = pickle.dumps({"addr": my_addr, "tensor": ping["tensor"]})
-            client_addr = ping["addr"]
-            done = threading.Event()
-            engine.submit_send(client_addr, send_msg, done.set, on_error_panic)
-            done.wait()
+            for client_addr in addr_list[1:]:
+                msg = recv_queue.get()
+                done = threading.Event()
+                engine.submit_send(client_addr, msg, done.set, on_error_panic)
+                done.wait()
     print(f"[Rank {rank}] ping-pong done", flush=True)
 
     dist.barrier()
