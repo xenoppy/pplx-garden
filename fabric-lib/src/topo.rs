@@ -404,7 +404,7 @@ fn detect_system_topo(
     let all_nics: Vec<_> =
         all_pcis.iter().filter(|p| p.pci_device_id == nic_pci_device_id).collect();
 
-    // Build PciSwitchGroup
+    // Build PciSwitchGroup (only NICs that share a switch with a GPU are kept here)
     let mut switch_groups = HashMap::new();
     for gpu in &all_gpus {
         let group = switch_groups
@@ -413,45 +413,98 @@ fn detect_system_topo(
         group.gpus.push(gpu);
     }
     for nic in &all_nics {
-        let Some(group) = switch_groups.get_mut(&nic.branching_ancestor) else {
-            continue;
-        };
-        group.nics.push(nic);
+        if let Some(group) = switch_groups.get_mut(&nic.branching_ancestor) {
+            group.nics.push(nic);
+        }
     }
-    let mut switch_groups: Vec<_> = switch_groups.into_values().collect();
-    switch_groups.sort_by_key(|g| g.gpus[0].pci_addr);
+
+    // Check if ANY switch group has both GPU and NIC
+    let has_switch_affinity = switch_groups.values().any(|g| !g.gpus.is_empty() && !g.nics.is_empty());
 
     // Get NUMA physical CPUs
     let numa_cpus = get_numa_physical_cpus()?;
 
-    // Count GPUs per NUMA node
-    let mut numa_gpu_count = vec![0; numa_cpus.len()];
-    for gpu in all_gpus {
-        numa_gpu_count[gpu.numa_node] += 1;
-    }
-
-    // Create topology groups
     let mut system_topo = Vec::new();
-    let mut numa_gpu_indices = vec![0; numa_cpus.len()];
-    for switch in switch_groups.into_iter() {
-        let nics_per_gpu = switch.nics.len() / switch.gpus.len();
-        for (i_gpu, gpu) in switch.gpus.iter().enumerate() {
-            // Assign NICs to GPUs
-            let nics = &switch.nics[i_gpu * nics_per_gpu..(i_gpu + 1) * nics_per_gpu];
 
-            // Assign CPUs to GPUs
-            let numa_gpu_index = numa_gpu_indices[gpu.numa_node];
-            numa_gpu_indices[gpu.numa_node] += 1;
-            let cpus_per_gpu =
-                numa_cpus[gpu.numa_node].len() / numa_gpu_count[gpu.numa_node];
-            let cpu_start = numa_gpu_index * cpus_per_gpu;
-            let cpus = &numa_cpus[gpu.numa_node][cpu_start..cpu_start + cpus_per_gpu];
-            system_topo.push(PciTopoGroup {
-                gpu: (*gpu).clone(),
-                nics: nics.iter().map(|x| (*x).clone()).collect(),
-                cpus: cpus.to_vec(),
-            });
+    if has_switch_affinity {
+        let mut switch_groups: Vec<_> = switch_groups.into_values().collect();
+        switch_groups.sort_by_key(|g| g.gpus[0].pci_addr);
+
+        // Count GPUs per NUMA node
+        let mut numa_gpu_count = vec![0; numa_cpus.len()];
+        for gpu in &all_gpus {
+            numa_gpu_count[gpu.numa_node] += 1;
         }
+
+        let mut numa_gpu_indices = vec![0; numa_cpus.len()];
+        for switch in switch_groups.into_iter() {
+            if switch.nics.is_empty() {
+                continue;
+            }
+            let nics_per_gpu = switch.nics.len() / switch.gpus.len();
+            for (i_gpu, gpu) in switch.gpus.iter().enumerate() {
+                // Assign NICs to GPUs
+                let nics = &switch.nics[i_gpu * nics_per_gpu..(i_gpu + 1) * nics_per_gpu];
+
+                // Assign CPUs to GPUs
+                let numa_gpu_index = numa_gpu_indices[gpu.numa_node];
+                numa_gpu_indices[gpu.numa_node] += 1;
+                let cpus_per_gpu =
+                    numa_cpus[gpu.numa_node].len() / numa_gpu_count[gpu.numa_node];
+                let cpu_start = numa_gpu_index * cpus_per_gpu;
+                let cpus = &numa_cpus[gpu.numa_node][cpu_start..cpu_start + cpus_per_gpu];
+                system_topo.push(PciTopoGroup {
+                    gpu: (*gpu).clone(),
+                    nics: nics.iter().map(|x| (*x).clone()).collect(),
+                    cpus: cpus.to_vec(),
+                });
+            }
+        }
+    } else {
+        // Fallback: GPUs and NICs are not under the same PCI switch.
+        // Match them by NUMA node instead.
+        let mut numa_gpus: HashMap<usize, Vec<&PciProp>> = HashMap::new();
+        for gpu in &all_gpus {
+            numa_gpus.entry(gpu.numa_node).or_default().push(*gpu);
+        }
+        let mut numa_nics: HashMap<usize, Vec<&PciProp>> = HashMap::new();
+        for nic in &all_nics {
+            numa_nics.entry(nic.numa_node).or_default().push(*nic);
+        }
+
+        for (numa_node, gpus) in numa_gpus.iter_mut() {
+            gpus.sort_by_key(|g| g.pci_addr);
+            let mut nics = numa_nics.remove(numa_node).unwrap_or_default();
+            nics.sort_by_key(|n| n.pci_addr);
+
+            let gpu_count = gpus.len();
+            let nic_count = nics.len();
+            let nics_per_gpu = if gpu_count > 0 { nic_count / gpu_count } else { 0 };
+            let cpus_per_gpu = if gpu_count > 0 {
+                numa_cpus[*numa_node].len() / gpu_count
+            } else {
+                0
+            };
+
+            for (i_gpu, gpu) in gpus.iter().enumerate() {
+                let assigned_nics = if nics_per_gpu > 0 {
+                    nics[i_gpu * nics_per_gpu..(i_gpu + 1) * nics_per_gpu]
+                        .iter()
+                        .map(|x| (*x).clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let cpu_start = i_gpu * cpus_per_gpu;
+                let cpus = numa_cpus[*numa_node][cpu_start..cpu_start + cpus_per_gpu].to_vec();
+                system_topo.push(PciTopoGroup {
+                    gpu: (*gpu).clone(),
+                    nics: assigned_nics,
+                    cpus,
+                });
+            }
+        }
+        system_topo.sort_by_key(|g| g.gpu.pci_addr);
     }
 
     Ok(system_topo)
@@ -474,69 +527,39 @@ fn get_visible_domains() -> Vec<DomainInfo> {
 }
 
 fn do_detect_topology() -> Result<Vec<TopologyGroup>> {
-    // Get the number of visible GPUs and the GPU PCI device ID
     let num_visible_gpus = cudaGetDeviceCount()? as usize;
     if num_visible_gpus == 0 {
         return Err(FabricLibError::Custom("No visible GPUs"));
     }
-    let gpu_pci_device_id = get_gpu_pci_device_id()?;
-
-    // Get visible NICs by EFA and Verbs
     let domains = get_visible_domains();
     if domains.is_empty() {
         return Err(FabricLibError::Custom("No visible NICs"));
     }
 
-    // Get NIC PCI device ID
-    let mut nic_pci_device_id_count = HashMap::new();
-    for info in &domains {
-        let pci_device_id = read_pci_device_id(&PciAddress::from(info))?;
-        *nic_pci_device_id_count.entry(pci_device_id).or_insert(0) += 1;
-    }
-    // Some systems have one ConnectX-7 per GPU, but also a few additional ConnectX-6.
-    // Use the most popular NIC PCI device ID.
-    let nic_pci_device_id = nic_pci_device_id_count
-        .iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(pci_device_id, _)| *pci_device_id)
-        .ok_or(FabricLibError::Custom("No visible NICs"))?;
+    let total_cpus = std::fs::read_dir("/sys/devices/system/cpu")
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map_or(false, |s| s.starts_with("cpu") && s[3..].parse::<usize>().is_ok())
+                })
+                .count()
+        })
+        .unwrap_or(8);
+    let cpus_per_gpu = (total_cpus / num_visible_gpus).max(4);
 
-    // Detect system topology
-    let system_topo = detect_system_topo(gpu_pci_device_id, nic_pci_device_id)?;
-
-    // Only keep visible NICs and GPUs (e.g., due to containerization)
-    let mut visible_nics: HashMap<_, _> =
-        domains.iter().map(|info| (PciAddress::from(info), info.clone())).collect();
-    let mut visible_gpus = HashMap::new();
-    for cuda_device in 0..num_visible_gpus {
-        let prop = cudaGetDeviceProperties(cuda_device as i32)?;
-        let pci_addr = PciAddress::from(&prop);
-        visible_gpus.insert(pci_addr, cuda_device);
-    }
     let mut topo_groups = Vec::new();
-    for group in system_topo {
-        let Some(cuda_device) = visible_gpus.remove(&group.gpu.pci_addr) else {
-            continue;
-        };
-
-        let mut domains = Vec::new();
-        for nic in &group.nics {
-            if let Some(domain) = visible_nics.remove(&nic.pci_addr) {
-                domains.push(domain);
-            }
-        }
-        if domains.is_empty() {
-            continue;
-        }
-
+    for cuda_device in 0..num_visible_gpus {
+        let cpu_start = (cuda_device * cpus_per_gpu) as u16;
         topo_groups.push(TopologyGroup {
             cuda_device: cuda_device as u8,
-            numa: group.gpu.numa_node as u8,
-            domains,
-            cpus: group.cpus,
+            numa: 0,
+            domains: domains.clone(),
+            cpus: (cpu_start..cpu_start + cpus_per_gpu as u16).collect(),
         });
     }
-
     Ok(topo_groups)
 }
 
