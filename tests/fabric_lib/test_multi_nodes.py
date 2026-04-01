@@ -288,10 +288,10 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         avg_us = sum(latencies) / len(latencies)
         min_us = min(latencies)
         max_us = max(latencies)
-        total_results.append((num_token, avg_us, min_us, max_us))
+        total_results.append((num_token, ping_msg_size, avg_us, min_us, max_us))
         print("=" * 60, flush=True)
-    for num_token, avg_us, min_us, max_us in total_results:
-        print(f"num_token={num_token:3d} | avg={avg_us:8.2f} us | min={min_us:8.2f} us | max={max_us:8.2f} us", flush=True)
+    for num_token, msg_size, avg_us, min_us, max_us in total_results:
+        print(f"num_token={num_token:3d} | msg_size={msg_size:4d} | avg={avg_us:8.2f} us | min={min_us:8.2f} us | max={max_us:8.2f} us", flush=True)
     dist.barrier()
     logger.info("Rank %d: done.", rank)
 
