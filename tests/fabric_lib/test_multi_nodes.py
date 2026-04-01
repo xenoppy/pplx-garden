@@ -32,8 +32,8 @@ logger = logging_utils.get_logger(__name__)
 
 CUDA_BUF_SIZE = 256 << 20
 MESSAGE_BUF_SIZE = 64 << 20
-NUM_WARMUP_ITERS = 10
-NUM_LATENCY_ITERS = 50
+NUM_WARMUP_ITERS = 50
+NUM_LATENCY_ITERS = 200
 
 
 @dataclasses.dataclass(slots=True)
