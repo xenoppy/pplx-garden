@@ -13,6 +13,7 @@ import pickle
 import queue
 import sys
 import threading
+import time
 from typing import Any
 
 import torch
@@ -31,6 +32,7 @@ logger = logging_utils.get_logger(__name__)
 
 CUDA_BUF_SIZE = 256 << 20
 MESSAGE_BUF_SIZE = 64 << 20
+NUM_LATENCY_ITERS = 10
 
 
 @dataclasses.dataclass(slots=True)
@@ -163,6 +165,17 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     for t in ack_threads:
         t.join()
 
+    # --- latency ping-pong ---
+    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
+    for _ in range((world_size - 1) * NUM_LATENCY_ITERS):
+        msg = recv_queue.get()
+        ping = pickle.loads(msg)
+        client_addr = ping["addr"]
+        done = threading.Event()
+        engine.submit_send(client_addr, pickle.dumps(None), done.set, on_error_panic)
+        done.wait()
+    print(f"[Rank {rank}] ping-pong done", flush=True)
+
     dist.barrier()
     logger.info("Server done.")
 
@@ -228,6 +241,27 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     buf = cuda_buf[offset : offset + length].to("cpu")
     assert torch.equal(gold, buf), f"Data mismatch on rank {rank}"
     logger.info("Rank %d: verified successfully", rank)
+
+    # --- latency ping-pong ---
+    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
+    latencies: list[float] = []
+    for _ in range(NUM_LATENCY_ITERS):
+        ping_data = pickle.dumps({"addr": my_addr})
+        t0 = time.perf_counter_ns()
+        send_done = threading.Event()
+        engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
+        send_done.wait()
+        recv_queue.get()
+        t1 = time.perf_counter_ns()
+        latencies.append((t1 - t0) / 1000.0)  # us
+
+    avg_us = sum(latencies) / len(latencies)
+    min_us = min(latencies)
+    max_us = max(latencies)
+    print(
+        f"[Rank {rank}] Latency: avg={avg_us:.1f} us, min={min_us:.1f} us, max={max_us:.1f} us",
+        flush=True,
+    )
 
     dist.barrier()
     logger.info("Rank %d: done.", rank)
