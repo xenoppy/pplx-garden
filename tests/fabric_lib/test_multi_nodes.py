@@ -168,18 +168,22 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     # --- latency ping-pong ---
     print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
     ping_iters = (world_size - 1) * NUM_LATENCY_ITERS
-    ping_msg_size = len(pickle.dumps({"addr": my_addr}))
-    print(
-        f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
-        flush=True,
-    )
-    for _ in range(ping_iters):
-        msg = recv_queue.get()
-        ping = pickle.loads(msg)
-        client_addr = ping["addr"]
-        done = threading.Event()
-        engine.submit_send(client_addr, pickle.dumps(None), done.set, on_error_panic)
-        done.wait()
+
+    max_num_token, dim = 128, 7168
+
+    for num_token in range(8, max_num_token + 1, 8):
+        send_msg = pickle.dumps({"addr": my_addr, "tensor": ping["tensor"]})
+        print(
+            f"[Rank {rank}] ping-pong config: token_num={max_num_token}, msg_size={len(send_msg)} bytes, iters={ping_iters}",
+            flush=True,
+        )
+        for _ in range(ping_iters):
+            msg = recv_queue.get()
+            ping = pickle.loads(msg)
+            client_addr = ping["addr"]
+            done = threading.Event()
+            engine.submit_send(client_addr, send_msg, done.set, on_error_panic)
+            done.wait()
     print(f"[Rank {rank}] ping-pong done", flush=True)
 
     dist.barrier()
@@ -249,31 +253,37 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     logger.info("Rank %d: verified successfully", rank)
 
     # --- latency ping-pong ---
-    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
-    ping_data = pickle.dumps({"addr": my_addr})
-    ping_msg_size = len(ping_data)
-    ping_iters = NUM_LATENCY_ITERS
-    print(
-        f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
-        flush=True,
-    )
-    latencies: list[float] = []
-    for _ in range(ping_iters):
-        t0 = time.perf_counter_ns()
-        send_done = threading.Event()
-        engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
-        send_done.wait()
-        recv_queue.get()
-        t1 = time.perf_counter_ns()
-        latencies.append((t1 - t0) / 1000.0)  # us
+    max_num_token, dim = 128, 7168
+    max_tensor = torch.rand([max_num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')
 
-    avg_us = sum(latencies) / len(latencies)
-    min_us = min(latencies)
-    max_us = max(latencies)
-    print(
-        f"[Rank {rank}] Latency: avg={avg_us:.1f} us, min={min_us:.1f} us, max={max_us:.1f} us",
-        flush=True,
-    )
+    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
+    for num_token in range(8, max_num_token + 1, 8):
+        print(f"[Rank {rank}] ping-pong iteration with num_token={num_token}...", flush=True)
+        ping_data = pickle.dumps({"addr": my_addr, "tensor": max_tensor[:num_token]})
+        ping_msg_size = len(ping_data)
+        ping_iters = NUM_LATENCY_ITERS
+        print(
+            f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
+            flush=True,
+        )
+        latencies: list[float] = []
+        for _ in range(ping_iters):
+            t0 = time.perf_counter_ns()
+            send_done = threading.Event()
+            engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
+            send_done.wait()
+            recv_queue.get()
+            t1 = time.perf_counter_ns()
+            latencies.append((t1 - t0) / 1000.0)  # us
+
+        avg_us = sum(latencies) / len(latencies)
+        min_us = min(latencies)
+        max_us = max(latencies)
+        print(
+            f"[Rank {rank}] Latency: avg={avg_us:.1f} us, min={min_us:.1f} us, max={max_us:.1f} us",
+            flush=True,
+        )
+        print("=" * 60, flush=True)
 
     dist.barrier()
     logger.info("Rank %d: done.", rank)
