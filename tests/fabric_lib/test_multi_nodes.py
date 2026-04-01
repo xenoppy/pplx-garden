@@ -32,7 +32,8 @@ logger = logging_utils.get_logger(__name__)
 
 CUDA_BUF_SIZE = 256 << 20
 MESSAGE_BUF_SIZE = 64 << 20
-NUM_LATENCY_ITERS = 10
+NUM_WARMUP_ITERS = 10
+NUM_LATENCY_ITERS = 50
 
 
 @dataclasses.dataclass(slots=True)
@@ -167,7 +168,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
     # --- latency ping-pong ---
     print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
-    ping_iters = (world_size - 1) * NUM_LATENCY_ITERS
+    ping_iters = (world_size - 1) * (NUM_LATENCY_ITERS + NUM_WARMUP_ITERS)
 
     max_num_token, dim = 128, 7168
 
@@ -263,7 +264,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         print(f"[Rank {rank}] ping-pong iteration with num_token={num_token}...", flush=True)
         ping_data = pickle.dumps({"addr": my_addr, "tensor": tensor_to_send})
         ping_msg_size = len(ping_data)
-        ping_iters = NUM_LATENCY_ITERS
+        ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
         print(
             f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
             flush=True,
@@ -281,7 +282,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 print("❌Received tensor does not match sent tensor")
             else:
                 print("✅Received tensor matches sent tensor")
-            latencies.append((t1 - t0) / 1000.0)  # us
+            if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
+                latencies.append((t1 - t0) / 1000.0)  # us
 
         avg_us = sum(latencies) / len(latencies)
         min_us = min(latencies)
