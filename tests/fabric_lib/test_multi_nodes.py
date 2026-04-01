@@ -172,14 +172,15 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     max_num_token, dim = 128, 7168
 
     for num_token in range(8, max_num_token + 1, 8):
-        send_msg = pickle.dumps({"addr": my_addr, "tensor": ping["tensor"]})
+        send_msg = pickle.dumps({"addr": my_addr, "tensor": torch.rand([num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')})
         print(
-            f"[Rank {rank}] ping-pong config: token_num={max_num_token}, msg_size={len(send_msg)} bytes, iters={ping_iters}",
+            f"[Rank {rank}] ping-pong config: token_num={num_token}, msg_size={len(send_msg)} bytes, iters={ping_iters}",
             flush=True,
         )
         for _ in range(ping_iters):
             msg = recv_queue.get()
             ping = pickle.loads(msg)
+            send_msg = pickle.dumps({"addr": my_addr, "tensor": ping["tensor"]})
             client_addr = ping["addr"]
             done = threading.Event()
             engine.submit_send(client_addr, send_msg, done.set, on_error_panic)
@@ -254,12 +255,13 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
 
     # --- latency ping-pong ---
     max_num_token, dim = 128, 7168
-    max_tensor = torch.rand([max_num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')
 
     print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
     for num_token in range(8, max_num_token + 1, 8):
+        tensor_to_send = torch.rand([num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')
+
         print(f"[Rank {rank}] ping-pong iteration with num_token={num_token}...", flush=True)
-        ping_data = pickle.dumps({"addr": my_addr, "tensor": max_tensor[:num_token]})
+        ping_data = pickle.dumps({"addr": my_addr, "tensor": tensor_to_send})
         ping_msg_size = len(ping_data)
         ping_iters = NUM_LATENCY_ITERS
         print(
