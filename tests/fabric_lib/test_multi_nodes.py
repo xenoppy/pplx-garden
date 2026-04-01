@@ -26,6 +26,7 @@ from pplx_garden.fabric_lib import (
 )
 from pplx_garden.utils import logging_utils
 
+logging_utils.setup(level=logging_utils.logging.INFO)
 logger = logging_utils.get_logger(__name__)
 
 CUDA_BUF_SIZE = 256 << 20
@@ -49,7 +50,9 @@ def on_error_panic(error: str) -> None:
 
 def build_engine(cuda_device: int) -> TransferEngine:
     """Build a TransferEngine for the selected GPU."""
+    print(f"[build_engine] cuda_device={cuda_device}: calling detect_topology()...", flush=True)
     system_topo = TransferEngine.detect_topology()
+    print(f"[build_engine] detected {len(system_topo)} topo groups", flush=True)
     builder = TransferEngine.builder()
 
     found = False
@@ -69,7 +72,10 @@ def build_engine(cuda_device: int) -> TransferEngine:
 
     if not found:
         raise RuntimeError(f"CUDA device {cuda_device} not found in topology")
-    return builder.build()
+    print(f"[build_engine] cuda_device={cuda_device}: building engine...", flush=True)
+    engine = builder.build()
+    print(f"[build_engine] cuda_device={cuda_device}: engine built OK, addr={engine.main_address}", flush=True)
+    return engine
 
 
 def generate_random_bytes(seed: int, size: int) -> torch.Tensor:
@@ -80,12 +86,15 @@ def generate_random_bytes(seed: int, size: int) -> torch.Tensor:
 
 def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     """Rank 0: waits for client requests and writes data to their MRs."""
+    print(f"[Rank {rank}] run_server start", flush=True)
     engine = build_engine(cuda_device)
 
     # Gather all DomainAddresses so clients know how to reach us.
     my_addr = engine.main_address
+    print(f"[Rank {rank}] all_gather_object start", flush=True)
     addr_list: list[Any] = [None] * world_size
     dist.all_gather_object(addr_list, my_addr)
+    print(f"[Rank {rank}] all_gather_object done: {addr_list}", flush=True)
     logger.info("Server address: %s", my_addr)
 
     # Register one local CUDA buffer.
@@ -160,12 +169,15 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
 def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     """Rank > 0: sends its MR info to the server and verifies the RDMA write."""
+    print(f"[Rank {rank}] run_client start", flush=True)
     engine = build_engine(cuda_device)
 
     # Exchange addresses.
     my_addr = engine.main_address
+    print(f"[Rank {rank}] all_gather_object start", flush=True)
     addr_list: list[Any] = [None] * world_size
     dist.all_gather_object(addr_list, my_addr)
+    print(f"[Rank {rank}] all_gather_object done: {addr_list}", flush=True)
     server_addr = addr_list[0]
     logger.info("Server address: %s", server_addr)
 
@@ -207,7 +219,9 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     logger.info("Rank %d: sent request to server", rank)
 
     # Wait for server ACK (so we know the RDMA write is complete).
+    print(f"[Rank {rank}] waiting for server ACK...", flush=True)
     recv_queue.get()
+    print(f"[Rank {rank}] received ACK", flush=True)
 
     # Verify the data written by the server.
     gold = generate_random_bytes(seed - 1, length)
@@ -224,15 +238,30 @@ def main() -> None:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    print(f"[Rank {rank}/{world_size}] Starting... local_rank={local_rank}", flush=True)
+
+    try:
+        dist.init_process_group("gloo", rank=rank, world_size=world_size)
+        print(f"[Rank {rank}] Gloo init OK", flush=True)
+    except Exception as e:
+        print(f"[Rank {rank}] Gloo init FAILED: {e}", flush=True)
+        raise
 
     try:
         if rank == 0:
             run_server(rank, world_size, local_rank)
         else:
             run_client(rank, world_size, local_rank)
+    except Exception as e:
+        print(f"[Rank {rank}] ERROR: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     finally:
+        print(f"[Rank {rank}] Destroying process group", flush=True)
         dist.destroy_process_group()
+
+    print(f"[Rank {rank}] Done.", flush=True)
 
 
 if __name__ == "__main__":
