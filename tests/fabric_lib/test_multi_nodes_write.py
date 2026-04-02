@@ -42,9 +42,8 @@ class SingleWriteRequest:
 
     addr: DomainAddress
     mr_desc: MemoryRegionDescriptor
-    seed: int
     offset: int
-    length: int
+    max_length: int
 
 
 def on_error_panic(error: str) -> None:
@@ -104,7 +103,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     cuda_buf = torch.empty(
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
     )
-    cuda_mr_handle, _ = engine.register_tensor(cuda_buf)
+    cuda_mr_handle, cuda_mr_desc = engine.register_tensor(cuda_buf)
 
     # Setup bouncing RECVs for incoming client requests.
     recv_queue: queue.Queue[bytes] = queue.Queue()
@@ -114,6 +113,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         on_recv=recv_queue.put,
         on_error=on_error_panic,
     )
+
 
     cond = threading.Condition()
     completions = 0
@@ -127,64 +127,60 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     # Wait for each client request and RDMA write back to it.
     for _ in range(world_size - 1):
         msg = recv_queue.get()
-        request: SingleWriteRequest = pickle.loads(msg)
-        logger.info("Received request from client %s", request.addr)
+        recv_request: SingleWriteRequest = pickle.loads(msg)
+        logger.info("Received request from client %s", recv_request.addr)
 
-        # Generate the same golden data the client expects.
-        gold = generate_random_bytes(request.seed - 1, request.length)
-        cuda_buf[request.offset : request.offset + request.length].copy_(gold)
+        offset_for_client = 0
+        length = CUDA_BUF_SIZE
 
-        engine.submit_write(
-            src_mr=cuda_mr_handle,
-            offset=request.offset,
-            length=request.length,
-            imm_data=None,
-            dst_mr=request.mr_desc,
-            dst_offset=request.offset,
-            on_done=transfer_callback,
-            on_error=on_error_panic,
+        send_request = SingleWriteRequest(
+            addr=my_addr,
+            mr_desc=cuda_mr_desc,
+            offset=offset_for_client,
+            max_length=length,
         )
-
-    with cond:
-        while completions < world_size - 1:
-            cond.wait()
-
-    # Send a small ACK back to each client so they can exit their RECV loop cleanly.
-    # In the original local test the client does `recv_queue.get()` to match this.
-    ack_threads = []
-    for client_addr in addr_list[1:]:
-        done = threading.Event()
-
-        def ack(_done: threading.Event = done, _addr: DomainAddress = client_addr) -> None:
-            engine.submit_send(_addr, pickle.dumps(None), _done.set, on_error_panic)
-            _done.wait()
-
-        t = threading.Thread(target=ack)
-        t.start()
-        ack_threads.append(t)
-
-    for t in ack_threads:
-        t.join()
-
-    # --- latency ping-pong ---
-    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
-    ping_iters = (world_size - 1) * (NUM_LATENCY_ITERS + NUM_WARMUP_ITERS)
-
-    max_num_token, dim = 128, 7168
-
-    for num_token in range(8, max_num_token + 1, 8):
-        send_msg = pickle.dumps({"addr": my_addr, "tensor": torch.rand([num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')})
-        print(
-            f"[Rank {rank}] ping-pong config: token_num={num_token}, msg_size={len(send_msg)} bytes, iters={ping_iters}",
-            flush=True,
+        
+        send_done = threading.Event()
+        engine.submit_send(
+            recv_request.addr,
+            pickle.dumps(send_request),
+            send_done.set,
+            on_error_panic,
         )
-        for _ in range(ping_iters):
-            for client_addr in addr_list[1:]:
-                msg = recv_queue.get()
-                done = threading.Event()
-                engine.submit_send(client_addr, msg, done.set, on_error_panic)
-                done.wait()
-    print(f"[Rank {rank}] ping-pong done", flush=True)
+        logger.info("Server Rank %d: sent request to client", rank)
+
+        send_done.wait()
+
+        recv_imm_cond = threading.Event()
+
+        def on_imm(imm: int) -> None:
+            assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+            with recv_imm_cond:
+                recv_imm_cond.notify_all()
+
+        engine.set_imm_callback(on_imm)
+
+        max_num_token, dim = 128, 7168
+        offset = 0
+        for num_token in range(8, max_num_token + 1, 8):
+            ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
+            tensor_length = num_token * dim * torch.bfloat16().element_size()
+            for _ in range(ping_iters):                
+                with recv_imm_cond:
+                    recv_imm_cond.wait()
+                engine.submit_write(
+                    src_mr=cuda_mr_handle,
+                    offset=offset_for_client + offset,
+                    length=tensor_length,
+                    imm_data=num_token,
+                    dst_mr=recv_request.mr_desc,
+                    dst_offset=recv_request.offset + offset,
+                    on_done=None,
+                    on_error=on_error_panic,
+                )
+            offset = offset + tensor_length
+
+
 
     dist.barrier()
     logger.info("Server done.")
@@ -208,7 +204,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     cuda_buf = torch.zeros(
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
     )
-    _, cuda_mr_desc = engine.register_tensor(cuda_buf)
+    cuda_mr_handle, cuda_mr_desc = engine.register_tensor(cuda_buf)
 
     # Setup bouncing RECV to catch the server's ACK.
     recv_queue: queue.Queue[bytes] = queue.Queue()
@@ -226,9 +222,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     request = SingleWriteRequest(
         addr=my_addr,
         mr_desc=cuda_mr_desc,
-        seed=seed,
         offset=offset,
-        length=length,
+        max_length=length,
     )
 
     send_done = threading.Event()
@@ -243,53 +238,56 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
 
     # Wait for server ACK (so we know the RDMA write is complete).
     print(f"[Rank {rank}] waiting for server ACK...", flush=True)
-    recv_queue.get()
-    print(f"[Rank {rank}] received ACK", flush=True)
+    msg = recv_queue.get()
+    recv_request: SingleWriteRequest = pickle.loads(msg)
+    logger.info("Received request from server %s", recv_request.addr)
+    
+    recv_imm_cond = threading.Event()
 
-    # Verify the data written by the server.
-    gold = generate_random_bytes(seed - 1, length)
-    buf = cuda_buf[offset : offset + length].to("cpu")
-    assert torch.equal(gold, buf), f"Data mismatch on rank {rank}"
-    logger.info("Rank %d: verified successfully", rank)
+    def on_imm(imm: int) -> None:
+        assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+        with recv_imm_cond:
+            recv_imm_cond.notify_all()
 
-    # --- latency ping-pong ---
+    engine.set_imm_callback(on_imm)
+
+
+    logger.info("Ready to submit_write to server %s with imm", recv_request.addr)
     max_num_token, dim = 128, 7168
     total_results = []
-    print(f"[Rank {rank}] starting ping-pong latency test...", flush=True)
+    offset = 0
     for num_token in range(8, max_num_token + 1, 8):
-        tensor_to_send = torch.rand([num_token, dim], dtype=torch.bfloat16, device=f'cuda:{cuda_device}')
-
-        print(f"[Rank {rank}] ping-pong iteration with num_token={num_token}...", flush=True)
-        ping_data = pickle.dumps({"addr": my_addr, "tensor": tensor_to_send})
-        ping_msg_size = len(ping_data)
         ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
-        print(
-            f"[Rank {rank}] ping-pong config: msg_size={ping_msg_size} bytes, iters={ping_iters}",
-            flush=True,
-        )
+        tensor_length = num_token * dim * torch.bfloat16().element_size()
         latencies: list[float] = []
         for _ in range(ping_iters):
             t0 = time.perf_counter_ns()
-            send_done = threading.Event()
-            engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
-            send_done.wait()
-            recv_buffer = recv_queue.get()
+            engine.submit_write(
+                src_mr=cuda_mr_handle,
+                offset=offset,
+                length=tensor_length,
+                imm_data=num_token, #just for notifcation
+                dst_mr=recv_request.mr_desc,
+                dst_offset=recv_request.offset + offset,
+                on_done=None,  
+                on_error=on_error_panic,
+            )
+            recv_imm_cond.wait()  
             t1 = time.perf_counter_ns()
-            recv_data = pickle.loads(recv_buffer)
-            if not torch.allclose(recv_data["tensor"], tensor_to_send, atol=1e-3, rtol=1e-3):  # sanity check
-                print("❌Received tensor does not match sent tensor")
-            else:
-                print("✅Received tensor matches sent tensor")
             if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
-                latencies.append((t1 - t0) / 1000.0)  # us
+                latencies.append((t1 - t0) / 1000.0)  # us  
+
+        offset = offset + tensor_length
 
         avg_us = sum(latencies) / len(latencies)
         min_us = min(latencies)
         max_us = max(latencies)
-        total_results.append((num_token, ping_msg_size, avg_us, min_us, max_us))
+        total_results.append((num_token, tensor_length, avg_us, min_us, max_us))
         print("=" * 60, flush=True)
+    
     for num_token, msg_size, avg_us, min_us, max_us in total_results:
         print(f"num_token={num_token:3d} | msg_size={msg_size:4d} | avg={avg_us:8.2f} us | min={min_us:8.2f} us | max={max_us:8.2f} us", flush=True)
+
     dist.barrier()
     logger.info("Rank %d: done.", rank)
 
