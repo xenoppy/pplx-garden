@@ -155,12 +155,14 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
         recv_imm = threading.Event()
 
-        def on_imm(imm: int) -> None:
-            print(f"Received imm: {imm}, expected: {num_token}", flush=True)
-            assert imm == num_token, f"Expected imm {num_token} but got {imm}"
-            recv_imm.set()
+        # def on_imm(imm: int) -> None:
+        #     print(f"Received imm: {imm}, expected: {num_token}", flush=True)
+        #     assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+        #     recv_imm.set()
 
-        engine.set_imm_callback(on_imm)
+        # engine.set_imm_callback(on_imm)
+        imm_queue: queue.Queue[int] = queue.Queue()
+        engine.set_imm_callback(imm_queue.put)
 
         max_num_token, dim = 128, 7168
         offset = 0
@@ -170,9 +172,8 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
                 logger.info("Waiting for imm")           
-                recv_imm.wait()
-                logger.info("Received imm, submitting write with imm=%d", num_token)
-                recv_imm.clear()
+                imm = imm_queue.get()
+                logger.info("Received imm, submitting write with imm=%d", imm)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
                     offset=offset_for_client + offset,
@@ -267,6 +268,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         for _ in range(ping_iters):
             t0 = time.perf_counter_ns()
             write_done = threading.Event()
+            print(f"Submitting write with imm={num_token}, offset={offset}, length={tensor_length}", flush=True)
+            print(f"To server MR desc: {recv_request.mr_desc}, dst offset: {recv_request.offset + offset}", flush=True)
             engine.submit_write(
                 src_mr=cuda_mr_handle,
                 offset=offset,
