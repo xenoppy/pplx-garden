@@ -151,12 +151,11 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
         send_done.wait()
 
-        recv_imm_cond = threading.Condition()
+        recv_imm = threading.Event()
 
         def on_imm(imm: int) -> None:
             assert imm == num_token, f"Expected imm {num_token} but got {imm}"
-            with recv_imm_cond:
-                recv_imm_cond.notify_all()
+            recv_imm.set()
 
         engine.set_imm_callback(on_imm)
 
@@ -168,8 +167,8 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
                 logger.info("Waiting for imm")           
-                with recv_imm_cond:
-                    recv_imm_cond.wait()
+                recv_imm.wait()
+                recv_imm.clear()
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
                     offset=offset_for_client + offset,
@@ -244,12 +243,11 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     recv_request: SingleWriteRequest = pickle.loads(msg)
     logger.info("Received request from server %s", recv_request.addr)
     
-    recv_imm_cond = threading.Condition()
+    recv_imm = threading.Event()
 
     def on_imm(imm: int) -> None:
         assert imm == num_token, f"Expected imm {num_token} but got {imm}"
-        with recv_imm_cond:
-            recv_imm_cond.notify_all()
+        recv_imm.set()
 
     engine.set_imm_callback(on_imm)
 
@@ -277,9 +275,9 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             )
             write_done.wait()  # wait for the write to complete (optional, can be None)
             logger.info("Write Done, waiting for imm")
-            with recv_imm_cond:
-                recv_imm_cond.wait()  
+            recv_imm.wait()
             t1 = time.perf_counter_ns()
+            recv_imm.clear()
             if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
                 latencies.append((t1 - t0) / 1000.0)  # us  
 
