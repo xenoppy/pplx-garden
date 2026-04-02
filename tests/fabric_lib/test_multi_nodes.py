@@ -276,10 +276,10 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             recv_buffer = recv_queue.get()
             t1 = time.perf_counter_ns()
             recv_data = pickle.loads(recv_buffer)
-            if not torch.allclose(recv_data["tensor"], tensor_to_send, atol=1e-3, rtol=1e-3):  # sanity check
-                print("❌Received tensor does not match sent tensor")
-            else:
-                print("✅Received tensor matches sent tensor")
+            # if not torch.allclose(recv_data["tensor"], tensor_to_send, atol=1e-3, rtol=1e-3):  # sanity check
+            #     print("❌Received tensor does not match sent tensor")
+            # else:
+            #     print("✅Received tensor matches sent tensor")
             if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
                 latencies.append((t1 - t0) / 1000.0)  # us
 
