@@ -303,7 +303,11 @@ fn server_main(args: Vec<String>) -> anyhow::Result<()> {
         let data = unsafe {
             std::slice::from_raw_parts(host_buf.as_ptr() as *const u8, data_len)
         };
-        let request: PingPongRequest = postcard::from_bytes(data)?;
+        println!("Server received {} bytes, deserializing PingPongRequest...", data_len);
+        if data_len < 10 {
+            return Err(anyhow!("Received data too short ({} bytes)", data_len));
+        }
+        let request: PingPongRequest = postcard::from_bytes(data).map_err(|e| anyhow!("Deserialize failed ({} bytes): {}", data_len, e))?;
         println!(" Received request: bytes={}, repeats={}", request.write_bytes, request.repeats);
 
         // 2. Send server's mr_desc to client (so client can write back)
@@ -441,18 +445,10 @@ fn client_main(args: Vec<String>) -> anyhow::Result<()> {
     let client_cuda_res = &cuda_res[0];
 
     // Ping-pong test with different sizes
-    let test_sizes = vec![
-        64,
-        256,
-        1024,
-        4096,
-        16384,
-        65536,
-        256 * 1024,
-        1024 * 1024,
-        4 * 1024 * 1024,
-        16 * 1024 * 1024,
-    ];
+    let test_sizes: Vec<usize> = (8..=128)
+        .step_by(8)
+        .map(|i| i * 7168 * 2)
+        .collect();
 
     for write_bytes in test_sizes {
         if write_bytes > CUDA_BUF_SIZE {
@@ -492,7 +488,8 @@ fn client_main(args: Vec<String>) -> anyhow::Result<()> {
             engine,
             TransferCompletionEntry::Recv { transfer_id, data_len } => (transfer_id, data_len)
         )?;
-        let server_mr_desc: MemoryRegionDescriptor = postcard::from_bytes(unsafe {
+        println!("Client received {} bytes for mr_desc", data_len);
+            let server_mr_desc: MemoryRegionDescriptor = postcard::from_bytes(unsafe {
             std::slice::from_raw_parts(host_buf.as_ptr() as *const u8, data_len)
         })?;
 
