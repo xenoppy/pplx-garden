@@ -131,7 +131,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         offset = 0
         logger.info("Ready to submit_write to client %s with imm", client_addr)
         for num_token in range(8, max_num_token + 1, 8):
-            ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
+            ping_iters = 1
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
                 logger.info("Waiting for imm of num_token=%d", num_token)           
@@ -196,7 +196,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     total_results = []
     offset = 0
     for num_token in range(8, max_num_token + 1, 8):
-        ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
+        ping_iters = 1
         tensor_length = num_token * dim * 2
         latencies: list[float] = []
         for _ in range(ping_iters):
