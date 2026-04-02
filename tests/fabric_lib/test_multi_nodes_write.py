@@ -181,7 +181,6 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     logger.info("All MR descs: %s", mr_list)
     server_mr_desc = mr_list[0]
 
-    recv_imm = threading.Event()
 
     def on_imm(imm: int) -> None:
         print(f"Received imm: {imm}, expected: {num_token}", flush=True)
@@ -203,6 +202,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             time.sleep(1)  # ensure server is waiting for our imm
             t0 = time.perf_counter_ns()
             write_done = threading.Event()
+            recv_imm = threading.Event()
             engine.submit_write(
                 src_mr=cuda_mr_handle,
                 offset=0,
@@ -212,6 +212,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 dst_offset=0,
                 on_done=write_done.set,
                 on_error=on_error_panic,
+                num_shards=None,
             )
             write_done.wait()  # wait for the write to complete (optional, can be None)
             logger.info("Write Done with imm=%d, waiting for imm", num_token)
