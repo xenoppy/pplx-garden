@@ -201,7 +201,6 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         tensor_length = num_token * dim * 2
         latencies: list[float] = []
         for _ in range(ping_iters):
-            time.sleep(1)  # ensure server is waiting for our imm
             t0 = time.perf_counter_ns()
             write_done = threading.Event()
             recv_imm = threading.Event()
