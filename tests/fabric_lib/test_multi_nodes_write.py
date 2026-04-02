@@ -98,62 +98,24 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     dist.all_gather_object(addr_list, my_addr)
     print(f"[Rank {rank}] all_gather_object done: {addr_list}", flush=True)
     logger.info("Server address: %s", my_addr)
-    logger.info("All addresses: %s", addr_list)
+    client_addr = addr_list[1] #only one to one test for now.
+    logger.info("Client address: %s", client_addr)
 
-    client_addrs = addr_list[1] #only one to one test for now.
+
+
     # Register one local CUDA buffer.
     cuda_buf = torch.empty(
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
     )
     cuda_mr_handle, cuda_mr_desc = engine.register_tensor(cuda_buf)
     logger.info("Registered local CUDA buffer as MR: handle=%s, desc=%s", cuda_mr_handle, cuda_mr_desc)
-
-    # Setup bouncing RECVs for incoming client requests.
-    recv_queue: queue.Queue[bytes] = queue.Queue()
-    engine.submit_bouncing_recvs(
-        count=world_size - 1,
-        len=MESSAGE_BUF_SIZE,
-        on_recv=recv_queue.put,
-        on_error=on_error_panic,
-    )
-
-
-    cond = threading.Condition()
-    completions = 0
-
-    def transfer_callback() -> None:
-        nonlocal completions
-        with cond:
-            completions += 1
-            cond.notify_all()
+    mr_list: list[Any] = [None] * world_size
+    dist.all_gather_object(mr_list, cuda_mr_desc)
+    logger.info("All MR descs: %s", mr_list)
+    client_mr_desc = mr_list[1]
 
     # Wait for each client request and RDMA write back to it.
     for _ in range(world_size - 1):
-        msg = recv_queue.get()
-        recv_request: SingleWriteRequest = pickle.loads(msg)
-        logger.info("Received request from client %s", recv_request.addr)
-
-        offset_for_client = 0
-        length = CUDA_BUF_SIZE
-
-        send_request = SingleWriteRequest(
-            addr=my_addr,
-            mr_desc=cuda_mr_desc,
-            offset=offset_for_client,
-            max_length=length,
-        )
-        
-        send_done = threading.Event()
-        engine.submit_send(
-            recv_request.addr,
-            pickle.dumps(send_request),
-            send_done.set,
-            on_error_panic,
-        )
-        logger.info("Server Rank %d: sent request to client", rank)
-
-        send_done.wait()
-
         recv_imm = threading.Event()
 
         # def on_imm(imm: int) -> None:
@@ -167,7 +129,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
         max_num_token, dim = 128, 7168
         offset = 0
-        logger.info("Ready to submit_write to client %s with imm", recv_request.addr)
+        logger.info("Ready to submit_write to client %s with imm", client_addr)
         for num_token in range(8, max_num_token + 1, 8):
             ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
             tensor_length = num_token * dim * 2
@@ -177,11 +139,11 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
                 logger.info("Received imm, submitting write with imm=%d", imm)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
-                    offset=offset_for_client + offset,
+                    offset=offset,
                     length=tensor_length,
                     imm_data=num_token,
-                    dst_mr=recv_request.mr_desc,
-                    dst_offset=recv_request.offset + offset,
+                    dst_mr=client_mr_desc,
+                    dst_offset=offset,
                     on_done=None,
                     on_error=on_error_panic,
                 )
@@ -213,41 +175,12 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
     )
     cuda_mr_handle, cuda_mr_desc = engine.register_tensor(cuda_buf)
+    logger.info("Registered local CUDA buffer as MR: handle=%s, desc=%s", cuda_mr_handle, cuda_mr_desc)
+    mr_list: list[Any] = [None] * world_size
+    dist.all_gather_object(mr_list, cuda_mr_desc)
+    logger.info("All MR descs: %s", mr_list)
+    server_mr_desc = mr_list[0]
 
-    # Setup bouncing RECV to catch the server's ACK.
-    recv_queue: queue.Queue[bytes] = queue.Queue()
-    engine.submit_bouncing_recvs(
-        count=1,
-        len=MESSAGE_BUF_SIZE,
-        on_recv=recv_queue.put,
-        on_error=on_error_panic,
-    )
-
-    seed = 0xABCDABCD987
-    offset = 1024
-    length = 1000
-
-    request = SingleWriteRequest(
-        addr=my_addr,
-        mr_desc=cuda_mr_desc,
-        offset=offset,
-        max_length=length,
-    )
-
-    send_done = threading.Event()
-    engine.submit_send(
-        server_addr,
-        pickle.dumps(request),
-        send_done.set,
-        on_error_panic,
-    )
-    send_done.wait()
-    logger.info("Rank %d: sent request to server", rank)
-
-    msg = recv_queue.get()
-    recv_request: SingleWriteRequest = pickle.loads(msg)
-    logger.info("Received request from server %s", recv_request.addr)
-    
     recv_imm = threading.Event()
 
     def on_imm(imm: int) -> None:
@@ -258,7 +191,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     engine.set_imm_callback(on_imm)
 
 
-    logger.info("Ready to submit_write to server %s with imm", recv_request.addr)
+    logger.info("Ready to submit_write to server %s with imm", server_addr)
     max_num_token, dim = 128, 7168
     total_results = []
     offset = 0
@@ -269,14 +202,12 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         for _ in range(ping_iters):
             t0 = time.perf_counter_ns()
             write_done = threading.Event()
-            print(f"Submitting write with imm={num_token}, offset={offset}, length={tensor_length}", flush=True)
-            print(f"To server MR desc: {recv_request.mr_desc}, dst offset: {recv_request.offset + offset}", flush=True)
             engine.submit_write(
                 src_mr=cuda_mr_handle,
                 offset=0,
                 length=tensor_length,
                 imm_data=num_token, #just for notifcation
-                dst_mr=recv_request.mr_desc,
+                dst_mr=server_mr_desc,
                 dst_offset=0,
                 on_done=write_done.set,
                 on_error=on_error_panic,
