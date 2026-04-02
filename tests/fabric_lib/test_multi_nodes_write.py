@@ -171,6 +171,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             for _ in range(ping_iters):     
                 logger.info("Waiting for imm")           
                 recv_imm.wait()
+                logger.info("Received imm, submitting write with imm=%d", num_token)
                 recv_imm.clear()
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
