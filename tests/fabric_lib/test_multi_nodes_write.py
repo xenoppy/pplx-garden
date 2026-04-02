@@ -118,14 +118,13 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     for _ in range(world_size - 1):
         recv_imm = threading.Event()
 
-        # def on_imm(imm: int) -> None:
-        #     print(f"Received imm: {imm}, expected: {num_token}", flush=True)
-        #     assert imm == num_token, f"Expected imm {num_token} but got {imm}"
-        #     recv_imm.set()
+        def on_imm(imm: int) -> None:
+            print(f"Received imm: {imm}, expected: {num_token}", flush=True)
+            assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+            recv_imm.set()
 
-        # engine.set_imm_callback(on_imm)
+        engine.set_imm_callback(on_imm)
         imm_queue: queue.Queue[int] = queue.Queue()
-        engine.set_imm_callback(imm_queue.put)
 
         max_num_token, dim = 128, 7168
         offset = 0
@@ -135,7 +134,8 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
                 logger.info("Waiting for imm of num_token=%d", num_token)           
-                imm = imm_queue.get()
+                recv_imm.wait()  # wait for imm from client
+                recv_imm.clear()
                 logger.info("Received imm, submitting write with imm=%d", imm)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
@@ -215,6 +215,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             write_done.wait()  # wait for the write to complete (optional, can be None)
             logger.info("Write Done with imm=%d, waiting for imm", num_token)
             recv_imm.wait()
+            recv_imm.clear()
             t1 = time.perf_counter_ns()
             recv_imm.clear()
             if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
