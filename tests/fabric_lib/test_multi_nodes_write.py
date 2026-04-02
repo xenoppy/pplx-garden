@@ -141,7 +141,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
                     src_mr=cuda_mr_handle,
                     offset=offset,
                     length=tensor_length,
-                    imm_data=num_token,
+                    imm_data=num_token*2,
                     dst_mr=client_mr_desc,
                     dst_offset=offset,
                     on_done=None,
@@ -207,7 +207,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 src_mr=cuda_mr_handle,
                 offset=0,
                 length=tensor_length,
-                imm_data=num_token, #just for notifcation
+                imm_data=num_token*2+1, #just for notifcation
                 dst_mr=server_mr_desc,
                 dst_offset=0,
                 on_done=write_done.set,
