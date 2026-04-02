@@ -356,7 +356,7 @@ fn server_main(args: Vec<String>) -> anyhow::Result<()> {
             // Wait for local Write completion (CQ)
             wait_completion!(
                 engine,
-                TransferCompletionEntry::Transfer(TransferId(id)) if id == 300 + repeat as u64 => ()
+                TransferCompletionEntry::Transfer(TransferId(_)) => ()
             )?;
 
             // --- PONG: Wait for Client to write back ---
@@ -534,7 +534,7 @@ fn client_main(args: Vec<String>) -> anyhow::Result<()> {
             // Wait for local write completion
             wait_completion!(
                 engine,
-                TransferCompletionEntry::Transfer(TransferId(id)) if id == 500 + repeat as u64 => ()
+                TransferCompletionEntry::Transfer(TransferId(_)) => ()
             )?;
         }
 
