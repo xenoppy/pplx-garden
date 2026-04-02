@@ -98,7 +98,9 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
     dist.all_gather_object(addr_list, my_addr)
     print(f"[Rank {rank}] all_gather_object done: {addr_list}", flush=True)
     logger.info("Server address: %s", my_addr)
+    logger.info("All addresses: %s", addr_list)
 
+    client_addrs = addr_list[1] #only one to one test for now.
     # Register one local CUDA buffer.
     cuda_buf = torch.empty(
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
@@ -200,6 +202,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     print(f"[Rank {rank}] all_gather_object done: {addr_list}", flush=True)
     server_addr = addr_list[0]
     logger.info("Server address: %s", server_addr)
+    logger.info("Client address: %s", my_addr)
 
     # Register receive buffer.
     cuda_buf = torch.zeros(
