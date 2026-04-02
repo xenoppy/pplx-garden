@@ -33,7 +33,7 @@ NUM_WARMUPS = 50
 NUM_REPEATS = 100
 
 TEST_SIZES = [
-    i * 7168 for i in range(8, 128 + 1, 8) 
+    i * 7168 * 2 for i in range(8, 128 + 1, 8) 
     # 64,
     # 256,
     # 1024,
