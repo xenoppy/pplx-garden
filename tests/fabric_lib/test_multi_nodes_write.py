@@ -258,7 +258,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     offset = 0
     for num_token in range(8, max_num_token + 1, 8):
         ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
-        tensor_length = num_token * dim * torch.bfloat16().element_size()
+        tensor_length = num_token * dim * 2
         latencies: list[float] = []
         for _ in range(ping_iters):
             t0 = time.perf_counter_ns()
