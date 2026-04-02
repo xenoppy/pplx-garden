@@ -119,8 +119,8 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         recv_imm = threading.Event()
 
         def on_imm(imm: int) -> None:
-            print(f"Received imm: {imm}, expected: {num_token}", flush=True)
-            assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+            print(f"Received imm: {imm}, expected: {num_token*2+1}", flush=True)
+            assert imm == num_token*2+1, f"Expected imm {num_token*2+1} but got {imm}"
             recv_imm.set()
 
         engine.set_imm_callback(on_imm)
@@ -183,8 +183,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
 
 
     def on_imm(imm: int) -> None:
-        print(f"Received imm: {imm}, expected: {num_token}", flush=True)
-        assert imm == num_token, f"Expected imm {num_token} but got {imm}"
+        print(f"Received imm: {imm}, expected: {num_token*2}", flush=True)
+        assert imm == num_token*2, f"Expected imm {num_token*2} but got {imm}"
         recv_imm.set()
 
     engine.set_imm_callback(on_imm)
