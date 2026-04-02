@@ -272,7 +272,8 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 on_done=None,  
                 on_error=on_error_panic,
             )
-            recv_imm_cond.wait()  
+            with recv_imm_cond:
+                recv_imm_cond.wait()  
             t1 = time.perf_counter_ns()
             if _ >= NUM_WARMUP_ITERS:  # skip warmup iters
                 latencies.append((t1 - t0) / 1000.0)  # us  
