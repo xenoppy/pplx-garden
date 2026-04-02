@@ -136,6 +136,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
                 logger.info("Waiting for imm of num_token=%d", num_token)           
                 recv_imm.wait()  # wait for imm from client
                 recv_imm.clear()
+                write_done = threading.Event()
                 logger.info("Received imm, submitting write with imm=%d", num_token)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
@@ -144,9 +145,10 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
                     imm_data=num_token*2,
                     dst_mr=client_mr_desc,
                     dst_offset=offset,
-                    on_done=None,
+                    on_done=write_done.set,
                     on_error=on_error_panic,
                 )
+                write_done.wait()  # wait for the write to complete (optional, can be None)
             offset = offset + tensor_length
 
 
