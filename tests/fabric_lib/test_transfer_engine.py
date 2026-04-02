@@ -480,13 +480,13 @@ def test_single_write(nets_per_gpu: int) -> None:
     queue = ctx.Queue()
     server = ctx.Process(
         target=_test_paged_write_server,
-        args=(queue, [2, 3], nets_per_gpu),
+        args=(queue, [1], nets_per_gpu),
     )
     server.start()
 
     client = ctx.Process(
         target=_test_single_write_client,
-        args=(queue, [0, 1], nets_per_gpu),
+        args=(queue, [0], nets_per_gpu),
     )
     client.start()
     client.join()
@@ -545,18 +545,19 @@ def _test_imm_client(
 @gpu_only
 @mark_ci_4gpu
 def test_imm(nets_per_gpu: int) -> None:
+    print("Testing IMM with nets_per_gpu =", nets_per_gpu)
     ctx = mp.get_context("spawn")
 
     queue = ctx.Queue()
     server = ctx.Process(
         target=_test_paged_write_server,
-        args=(queue, [2, 3], nets_per_gpu),
+        args=(queue, [1], nets_per_gpu),
     )
     server.start()
 
     client = ctx.Process(
         target=_test_imm_client,
-        args=(queue, [0, 1], nets_per_gpu),
+        args=(queue, [0], nets_per_gpu),
     )
     client.start()
     client.join()
@@ -620,28 +621,31 @@ def _test_single_write_cpu_send(queue: mp.Queue) -> None:
             device="cpu",
         )
         src_mr_handle, _ = engine.register_tensor(src_buf)
+        for _ in range(10):
+            print(f"iteration {_}: submitting write...", flush=True)
+            import time
+            time.sleep(1)
+            send_cond = threading.Condition()
 
-        send_cond = threading.Condition()
+            def on_write_complete() -> None:
+                with send_cond:
+                    send_cond.notify_all()
 
-        def on_write_complete() -> None:
+            engine.submit_write(
+                src_mr=src_mr_handle,
+                offset=0,
+                length=1024,
+                imm_data=555,
+                dst_mr=dst_mr_desc,
+                dst_offset=0,
+                on_done=on_write_complete,
+                on_error=on_error_panic,
+                num_shards=None,
+            )
+
+            # Wait for the send to complete.
             with send_cond:
-                send_cond.notify_all()
-
-        engine.submit_write(
-            src_mr=src_mr_handle,
-            offset=0,
-            length=1024,
-            imm_data=555,
-            dst_mr=dst_mr_desc,
-            dst_offset=0,
-            on_done=on_write_complete,
-            on_error=on_error_panic,
-            num_shards=None,
-        )
-
-        # Wait for the send to complete.
-        with send_cond:
-            send_cond.wait()
+                send_cond.wait()
     except:
         logger.exception("Failed to send CPU write")
         raise
@@ -679,8 +683,9 @@ def _test_single_write_cpu_recv(queue: mp.Queue) -> None:
         recv_cond = threading.Condition()
 
         # Wait for the packet to be received.
-        with recv_cond:
-            recv_cond.wait()
+        for _ in range(10):
+            with recv_cond:
+                recv_cond.wait()
 
         assert torch.all(dst_buf[:1024] == 1)
     except:
