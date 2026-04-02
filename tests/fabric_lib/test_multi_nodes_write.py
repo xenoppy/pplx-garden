@@ -151,7 +151,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
         send_done.wait()
 
-        recv_imm_cond = threading.Event()
+        recv_imm_cond = threading.Condition()
 
         def on_imm(imm: int) -> None:
             assert imm == num_token, f"Expected imm {num_token} but got {imm}"
@@ -242,7 +242,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     recv_request: SingleWriteRequest = pickle.loads(msg)
     logger.info("Received request from server %s", recv_request.addr)
     
-    recv_imm_cond = threading.Event()
+    recv_imm_cond = threading.Condition()
 
     def on_imm(imm: int) -> None:
         assert imm == num_token, f"Expected imm {num_token} but got {imm}"
