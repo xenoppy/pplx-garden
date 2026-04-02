@@ -134,7 +134,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
             ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
-                logger.info("Waiting for imm")           
+                logger.info("Waiting for imm of num_token=%d", num_token)           
                 imm = imm_queue.get()
                 logger.info("Received imm, submitting write with imm=%d", imm)
                 engine.submit_write(
@@ -213,7 +213,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 on_error=on_error_panic,
             )
             write_done.wait()  # wait for the write to complete (optional, can be None)
-            logger.info("Write Done, waiting for imm")
+            logger.info("Write Done with imm=%d, waiting for imm", num_token)
             recv_imm.wait()
             t1 = time.perf_counter_ns()
             recv_imm.clear()
