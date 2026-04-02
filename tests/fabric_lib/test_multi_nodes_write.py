@@ -162,10 +162,12 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
 
         max_num_token, dim = 128, 7168
         offset = 0
+        logger.info("Ready to submit_write to client %s with imm", recv_request.addr)
         for num_token in range(8, max_num_token + 1, 8):
             ping_iters = NUM_LATENCY_ITERS + NUM_WARMUP_ITERS
             tensor_length = num_token * dim * 2
-            for _ in range(ping_iters):                
+            for _ in range(ping_iters):     
+                logger.info("Waiting for imm")           
                 with recv_imm_cond:
                     recv_imm_cond.wait()
                 engine.submit_write(
@@ -262,6 +264,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         latencies: list[float] = []
         for _ in range(ping_iters):
             t0 = time.perf_counter_ns()
+            write_done = threading.Event()
             engine.submit_write(
                 src_mr=cuda_mr_handle,
                 offset=offset,
@@ -269,9 +272,12 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 imm_data=num_token, #just for notifcation
                 dst_mr=recv_request.mr_desc,
                 dst_offset=recv_request.offset + offset,
-                on_done=None,  
+                on_done=write_done.set,
                 on_error=on_error_panic,
             )
+            with write_done:
+                write_done.wait()  # wait for the write to complete (optional, can be None)
+            logger.info("Write Done, waiting for imm")
             with recv_imm_cond:
                 recv_imm_cond.wait()  
             t1 = time.perf_counter_ns()
