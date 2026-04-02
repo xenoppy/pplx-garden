@@ -106,6 +106,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         CUDA_BUF_SIZE, dtype=torch.uint8, device=f"cuda:{cuda_device}"
     )
     cuda_mr_handle, cuda_mr_desc = engine.register_tensor(cuda_buf)
+    logger.info("Registered local CUDA buffer as MR: handle=%s, desc=%s", cuda_mr_handle, cuda_mr_desc)
 
     # Setup bouncing RECVs for incoming client requests.
     recv_queue: queue.Queue[bytes] = queue.Queue()
@@ -272,11 +273,11 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             print(f"To server MR desc: {recv_request.mr_desc}, dst offset: {recv_request.offset + offset}", flush=True)
             engine.submit_write(
                 src_mr=cuda_mr_handle,
-                offset=offset,
+                offset=0,
                 length=tensor_length,
                 imm_data=num_token, #just for notifcation
                 dst_mr=recv_request.mr_desc,
-                dst_offset=recv_request.offset + offset,
+                dst_offset=0,
                 on_done=write_done.set,
                 on_error=on_error_panic,
             )
