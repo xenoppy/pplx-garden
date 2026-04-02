@@ -156,6 +156,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         recv_imm = threading.Event()
 
         def on_imm(imm: int) -> None:
+            print(f"Received imm: {imm}, expected: {num_token}", flush=True)
             assert imm == num_token, f"Expected imm {num_token} but got {imm}"
             recv_imm.set()
 
@@ -240,8 +241,6 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     send_done.wait()
     logger.info("Rank %d: sent request to server", rank)
 
-    # Wait for server ACK (so we know the RDMA write is complete).
-    print(f"[Rank {rank}] waiting for server ACK...", flush=True)
     msg = recv_queue.get()
     recv_request: SingleWriteRequest = pickle.loads(msg)
     logger.info("Received request from server %s", recv_request.addr)
@@ -249,6 +248,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     recv_imm = threading.Event()
 
     def on_imm(imm: int) -> None:
+        print(f"Received imm: {imm}, expected: {num_token}", flush=True)
         assert imm == num_token, f"Expected imm {num_token} but got {imm}"
         recv_imm.set()
 
