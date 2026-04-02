@@ -275,8 +275,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 on_done=write_done.set,
                 on_error=on_error_panic,
             )
-            with write_done:
-                write_done.wait()  # wait for the write to complete (optional, can be None)
+            write_done.wait()  # wait for the write to complete (optional, can be None)
             logger.info("Write Done, waiting for imm")
             with recv_imm_cond:
                 recv_imm_cond.wait()  
