@@ -187,7 +187,8 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         for _ in range(ping_iters):
             for client_addr in addr_list[1:]:
                 while not recv_flag[0]:
-                    pass  # wait for a ping from the client
+                    time.sleep(0)  # wait for the server's ping back
+
                 recv_flag[0] = False
                 msg = recv_queue.get()
                 done = threading.Event()
@@ -288,7 +289,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
             engine.submit_send(server_addr, ping_data, send_done.set, on_error_panic)
             # send_done.wait()
             while not recv_flag[0]:
-                pass  # wait for the server's ping back
+                time.sleep(0)  # wait for the server's ping back
             recv_buffer = recv_queue.get()
             t1 = time.perf_counter_ns()
             recv_data = pickle.loads(recv_buffer)
