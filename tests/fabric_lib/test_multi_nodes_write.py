@@ -136,7 +136,7 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
                 logger.info("Waiting for imm of num_token=%d", num_token)           
                 recv_imm.wait()  # wait for imm from client
                 recv_imm.clear()
-                logger.info("Received imm, submitting write with imm=%d", imm)
+                logger.info("Received imm, submitting write with imm=%d", num_token)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
                     offset=offset,
@@ -200,6 +200,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
         tensor_length = num_token * dim * 2
         latencies: list[float] = []
         for _ in range(ping_iters):
+            time.sleep(1)  # ensure server is waiting for our imm
             t0 = time.perf_counter_ns()
             write_done = threading.Event()
             engine.submit_write(
