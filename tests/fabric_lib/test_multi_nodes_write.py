@@ -32,7 +32,7 @@ logger = logging_utils.get_logger(__name__)
 
 CUDA_BUF_SIZE = 256 << 20
 MESSAGE_BUF_SIZE = 64 << 20
-NUM_WARMUP_ITERS = 0
+NUM_WARMUP_ITERS = 50
 NUM_LATENCY_ITERS = 200
 
 
@@ -130,14 +130,14 @@ def run_server(rank: int, world_size: int, cuda_device: int) -> None:
         offset = 0
         logger.info("Ready to submit_write to client %s with imm", client_addr)
         for num_token in range(8, max_num_token + 1, 8):
-            ping_iters = 1
+            ping_iters = NUM_WARMUP_ITERS + NUM_LATENCY_ITERS
             tensor_length = num_token * dim * 2
             for _ in range(ping_iters):     
-                logger.info("Waiting for imm of num_token=%d", num_token)           
+                # logger.info("Waiting for imm of num_token=%d", num_token)           
                 recv_imm.wait()  # wait for imm from client
                 recv_imm.clear()
                 write_done = threading.Event()
-                logger.info("Received imm, submitting write with imm=%d", num_token)
+                # logger.info("Received imm, submitting write with imm=%d", num_token)
                 engine.submit_write(
                     src_mr=cuda_mr_handle,
                     offset=offset,
@@ -197,7 +197,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
     total_results = []
     offset = 0
     for num_token in range(8, max_num_token + 1, 8):
-        ping_iters = 1
+        ping_iters = NUM_WARMUP_ITERS + NUM_LATENCY_ITERS
         tensor_length = num_token * dim * 2
         latencies: list[float] = []
         for _ in range(ping_iters):
@@ -216,7 +216,7 @@ def run_client(rank: int, world_size: int, cuda_device: int) -> None:
                 num_shards=None,
             )
             write_done.wait()  # wait for the write to complete (optional, can be None)
-            logger.info("Write Done with imm=%d, waiting for imm", num_token)
+            # logger.info("Write Done with imm=%d, waiting for imm", num_token)
             recv_imm.wait()
             recv_imm.clear()
             t1 = time.perf_counter_ns()
