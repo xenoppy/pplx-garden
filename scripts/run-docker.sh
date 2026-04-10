@@ -11,6 +11,7 @@ root_dir=$(realpath $(dirname $0)/..)
 set -x
 exec docker run --rm -it --name=dev-pplx-garden \
     -v $root_dir:/app \
+    -v $root_dir/../fail-slow/:/fail-slow/ \
     --init \
     --shm-size=32g \
     --ulimit=memlock=-1 \
