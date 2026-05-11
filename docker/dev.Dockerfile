@@ -71,4 +71,6 @@ ENV PATH="/root/.cargo/bin:$PATH" \
 # Python dependencies
 RUN python3 -m pip install numpy ninja maturin \
     pytest coverage mypy pylint ruff pyzmq
-
+RUN python3 -m pip install transformers==5.8.0
+RUN pip install https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.11/flash_attn-2.8.3+cu129torch2.9-cp312-cp312-linux_x86_64.whl
+RUN pip install ipython
