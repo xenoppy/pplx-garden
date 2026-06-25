@@ -634,7 +634,8 @@ impl VerbsDomain {
         }
 
         // NOTE(lequn): Need to set IBV_ACCESS_RELAXED_ORDERING otherwise it's under 200 Gbps.
-        let mut access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_RELAXED_ORDERING;
+        let mut access = IBV_ACCESS_LOCAL_WRITE;
+        // let mut access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_RELAXED_ORDERING;
         if allow_remote {
             access |= IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
         }
